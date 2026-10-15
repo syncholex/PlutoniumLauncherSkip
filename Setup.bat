@@ -12,7 +12,7 @@ if not exist "%ROOT%" mkdir "%ROOT%"
 
 echo Generating Launcher.ps1...
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$text=[IO.File]::ReadAllText($env:BATFILE); $marker='###PLUTO_PS_PAYLOAD_7F31###'; $i=$text.LastIndexOf($marker); if($i -lt 0){throw 'Payload marker missing'}; $payload=$text.Substring($i+$marker.Length).TrimStart([char[]](13,10)); [IO.File]::WriteAllText($env:PSFILE,$payload,[Text.UTF8Encoding]::new($true))"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$text=[IO.File]::ReadAllText($env:BATFILE); $marker='###PLUTO_PS_PAYLOAD_7F31###'; $i=$text.LastIndexOf($marker); if($i -lt 0){throw 'Payload marker missing'}; $payload=$text.Substring($i+$marker.Length).TrimStart([char[]](13,10)); [IO.File]::WriteAllText($env:PSFILE,$payload,[Text.Encoding]::UTF8)"
 
 if errorlevel 1 (
     echo Failed to generate Launcher.ps1.
@@ -251,7 +251,7 @@ catch {
     [IO.File]::WriteAllText(
         $UpdateScript,
         $wrapper,
-        [Text.UTF8Encoding]::new($true)
+        [Text.Encoding]::UTF8
     )
 
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -457,11 +457,72 @@ try {
     }
 
     $encrypted = [Convert]::FromBase64String($config.token)
-    $decrypted = [Security.Cryptography.ProtectedData]::Unprotect(
-        $encrypted,
-        $null,
-        [Security.Cryptography.DataProtectionScope]::CurrentUser
-    )
+
+    # Use Windows DPAPI directly. This avoids depending on the
+    # ProtectedData managed type being preloaded or exposed by a particular
+    # .NET / PowerShell runtime. DPAPI still decrypts only for the current user.
+    if (-not ("PlutoDpapiNative" -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class PlutoDpapiNative
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DATA_BLOB
+    {
+        public int cbData;
+        public IntPtr pbData;
+    }
+
+    [DllImport("crypt32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool CryptUnprotectData(
+        ref DATA_BLOB pDataIn,
+        IntPtr ppszDataDescr,
+        IntPtr pOptionalEntropy,
+        IntPtr pvReserved,
+        IntPtr pPromptStruct,
+        int dwFlags,
+        out DATA_BLOB pDataOut);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr LocalFree(IntPtr hMem);
+
+    public static byte[] Unprotect(byte[] encrypted)
+    {
+        if (encrypted == null) throw new ArgumentNullException("encrypted");
+
+        DATA_BLOB input = new DATA_BLOB();
+        DATA_BLOB output = new DATA_BLOB();
+        input.cbData = encrypted.Length;
+        input.pbData = Marshal.AllocHGlobal(encrypted.Length);
+
+        try
+        {
+            Marshal.Copy(encrypted, 0, input.pbData, encrypted.Length);
+
+            if (!CryptUnprotectData(ref input, IntPtr.Zero, IntPtr.Zero,
+                IntPtr.Zero, IntPtr.Zero, 0, out output))
+            {
+                throw new System.ComponentModel.Win32Exception(
+                    Marshal.GetLastWin32Error());
+            }
+
+            byte[] result = new byte[output.cbData];
+            Marshal.Copy(output.pbData, result, 0, output.cbData);
+            return result;
+        }
+        finally
+        {
+            if (input.pbData != IntPtr.Zero) Marshal.FreeHGlobal(input.pbData);
+            if (output.pbData != IntPtr.Zero) LocalFree(output.pbData);
+        }
+    }
+}
+"@
+    }
+
+    $decrypted = [PlutoDpapiNative]::Unprotect($encrypted)
     $userToken = [Text.Encoding]::UTF8.GetString($decrypted)
 
     if ([string]::IsNullOrWhiteSpace($userToken)) {
