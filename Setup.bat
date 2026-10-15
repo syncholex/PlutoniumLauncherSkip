@@ -16,7 +16,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$text=[IO.File]::Rea
 
 if errorlevel 1 (
     echo Failed to generate Launcher.ps1.
-    pause
+    timeout /t 5 /nobreak >nul
     exit /b 1
 )
 
@@ -24,13 +24,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" -Setup
 
 if errorlevel 1 (
     echo Setup failed.
-    pause
+    timeout /t 5 /nobreak >nul
     exit /b 1
 )
 
 echo.
 echo Setup complete.
-pause
+timeout /t 5 /nobreak >nul
 exit /b
 
 ###PLUTO_PS_PAYLOAD_7F31###
@@ -72,7 +72,7 @@ function Show-LauncherError {
     Write-Host "========== LAUNCHER ERROR ==========" -ForegroundColor Red
     Write-Host $Message -ForegroundColor Yellow
     Write-Host "====================================" -ForegroundColor Red
-    Read-Host "Press Enter to close"
+    Start-Sleep -Seconds 5
 }
 
 function Get-Libraries {
@@ -177,7 +177,7 @@ function New-GameShortcut {
     $shortcut = $shell.CreateShortcut((Join-Path $Desktop "$shortcutName.lnk"))
 
     $shortcut.TargetPath = $powershell
-    $shortcut.Arguments = '-NoExit -NoProfile -ExecutionPolicy Bypass -File "' +
+    $shortcut.Arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Normal -File "' +
         $PSCommandPath + '" -Mode ' + $GameMode
     $shortcut.WorkingDirectory = $Pluto
     $shortcut.Description = "Launch $Name through Plutonium"
@@ -308,7 +308,7 @@ if ($RegisterTaskOnly) {
     try {
         Register-HiddenUpdater
         Write-Host "Hidden updater task registered successfully."
-        Read-Host "Press Enter to close"
+        Start-Sleep -Seconds 5
         exit 0
     }
     catch {
@@ -548,15 +548,18 @@ public static class PlutoDpapiNative
 
     $arguments = '"' + $Mode + '" "' + $gamePath + '" -token "' + $sessionToken + '" -lgbtq'
 
+    # Start Plutonium, leave its launcher window visible briefly, then close
+    # this PowerShell launcher window without waiting for the game to exit.
     Start-Process `
         -FilePath $Bootstrapper `
         -ArgumentList $arguments `
         -WorkingDirectory $Pluto `
         -ErrorAction Stop
+
+    Start-Sleep -Seconds 5
+    exit 0
 }
 catch {
     Show-LauncherError $_.Exception.Message
     exit 1
 }
-
-Read-Host "Press Enter to close"
